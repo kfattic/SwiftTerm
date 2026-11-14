@@ -18,6 +18,9 @@ import ImageIO
 import SwiftUI
 
 let SwiftTermUnderlineStyleKey = NSAttributedString.Key("SwiftTermUnderlineStyle")
+/// Marks bold text in a font without a bold face, which is drawn twice, one
+/// pixel apart; see `TerminalView.syntheticBold`.
+let SwiftTermSyntheticBoldKey = NSAttributedString.Key("SwiftTermSyntheticBold")
 
 #if os(iOS) || os(visionOS)
 import UIKit
@@ -197,7 +200,13 @@ extension TerminalView {
         let lineAscent = CTFontGetAscent (fontSet.normal)
         let lineDescent = CTFontGetDescent (fontSet.normal)
         let lineLeading = CTFontGetLeading (fontSet.normal)
-        let cellHeight = ceil(lineAscent + lineDescent + lineLeading)
+        var cellHeight = ceil(lineAscent + lineDescent + lineLeading)
+        #if os(macOS)
+        if terminalAppLineHeight {
+            // Terminal.app rounds each metric up before adding them.
+            cellHeight = ceil(lineAscent) + ceil(lineDescent) + ceil(lineLeading)
+        }
+        #endif
         #if os(macOS)
         // The following is a more robust way of getting the largest ascii character width, but comes with a performance hit.
         // See: https://github.com/migueldeicaza/SwiftTerm/issues/286
@@ -228,6 +237,11 @@ extension TerminalView {
         switch color {
         case .defaultColor:
             if isFg {
+                #if os(macOS)
+                if isBold, let boldForegroundColor {
+                    return boldForegroundColor
+                }
+                #endif
                 return nativeForegroundColor
             } else {
                 return nativeBackgroundColor
@@ -374,7 +388,12 @@ extension TerminalView {
         
         var tf: TTFont
         let isBold = flags.contains(.bold)
-        if isBold {
+        #if os(macOS)
+        let usesBoldFace = useBoldFonts
+        #else
+        let usesBoldFace = true
+        #endif
+        if isBold && usesBoldFace {
             if flags.contains (.italic) {
                 tf = fontSet.boldItalic
             } else {
@@ -391,6 +410,9 @@ extension TerminalView {
             .foregroundColor: fg,
             .backgroundColor: bg
         ]
+        if isBold && usesBoldFace && needsSyntheticBold(italic: flags.contains(.italic)) {
+            nsattr [SwiftTermSyntheticBoldKey] = true
+        }
         if flags.contains (.underline) {
             let underlineColor = attribute.underlineColor.map {
                 mapColor(color: $0, isFg: true, isBold: flags.contains(.bold), useBrightColors: useBrightColors)
@@ -438,8 +460,13 @@ extension TerminalView {
         }
         var tf: TTFont
         let isBold = flags.contains(.bold)
+        #if os(macOS)
+        let usesBoldFace = useBoldFonts
+        #else
+        let usesBoldFace = true
+        #endif
         
-        if isBold || useBoldForBrightColor {
+        if (isBold || useBoldForBrightColor) && usesBoldFace {
             if flags.contains (.italic) {
                 tf = fontSet.boldItalic
             } else {
@@ -462,6 +489,9 @@ extension TerminalView {
             .foregroundColor: fgColor,
             .backgroundColor: bgColor
         ]
+        if isBold && usesBoldFace && needsSyntheticBold(italic: flags.contains(.italic)) {
+            nsattr [SwiftTermSyntheticBoldKey] = true
+        }
         if flags.contains (.underline) {
             let underlineColor = attribute.underlineColor.map {
                 mapColor(color: $0, isFg: true, isBold: isBold, useBrightColors: useBrightColors)
@@ -1358,11 +1388,14 @@ extension TerminalView {
                 drawBlockElements(lineInfo.blockElements, lineOrigin: lineOrigin, in: context)
             }
 
+            #if os(macOS)
+            context.setShouldAntialias(textAntialiasing)
+            context.setAllowsAntialiasing(textAntialiasing)
+            context.setShouldSmoothFonts(textAntialiasing)
+            context.setAllowsFontSmoothing(textAntialiasing)
+            #else
             context.setShouldAntialias(true)
             context.setAllowsAntialiasing(true)
-            #if os(macOS)
-            context.setShouldSmoothFonts(true)
-            context.setAllowsFontSmoothing(true)
             #endif
 
             // Glyph drawing loop — reuses cached CTLines
@@ -1406,6 +1439,13 @@ extension TerminalView {
                     }
 
                     CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                    if runAttributes[SwiftTermSyntheticBoldKey] != nil {
+                        // Bold text in a font without a bold face: draw it again
+                        // one device pixel to the right, as Terminal.app does.
+                        let dx = 1 / max(1, backingScaleFactor())
+                        var shifted = positions.map { CGPoint(x: $0.x + dx, y: $0.y) }
+                        CTFontDrawGlyphs(runFont, runGlyphs, &shifted, shifted.count, context)
+                    }
 
                     // Draw other attributes
                     drawRunAttributes(runAttributes, glyphPositions: positions, in: context)

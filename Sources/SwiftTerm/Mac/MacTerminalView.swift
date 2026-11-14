@@ -436,6 +436,30 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
     public var useBrightColors: Bool = true
 
+    /// Draws text with antialiasing and font smoothing. Set it to false for crisp,
+    /// pixel-sharp text, as Terminal.app draws it with "Antialias text" off.
+    public var textAntialiasing: Bool = true { didSet { if oldValue != textAntialiasing { colorsChanged() } } }
+    /// Draws bold text with the font's bold face. False draws it with the regular
+    /// face, as Terminal.app does with "Use bold fonts" off.
+    public var useBoldFonts: Bool = true { didSet { if oldValue != useBoldFonts { colorsChanged() } } }
+    /// When the font has no bold face (for example Andale Mono), draws bold text
+    /// twice, one pixel apart, as Terminal.app does. Off by default.
+    public var syntheticBold: Bool = false { didSet { if oldValue != syntheticBold { colorsChanged() } } }
+    /// The color of bold text in the default foreground color (Terminal.app's
+    /// "Bold Text" color); nil uses the foreground color.
+    public var boldForegroundColor: NSColor? = nil { didSet { if oldValue != boldForegroundColor { colorsChanged() } } }
+    /// Measures the line height as Terminal.app does: ascent, descent and leading
+    /// are each rounded up (Andale Mono 14 is 17 points high instead of 16).
+    public var terminalAppLineHeight: Bool = false { didSet { if oldValue != terminalAppLineHeight { resetFont() } } }
+
+    /// True when bold (or bold italic) text should be drawn twice because the
+    /// font has no such face.
+    func needsSyntheticBold (italic: Bool) -> Bool {
+        guard syntheticBold else { return false }
+        return italic ? fontSet.boldItalic.fontName == fontSet.italic.fontName
+                      : fontSet.bold.fontName == fontSet.normal.fontName
+    }
+
     /// When true, block element (U+2580-U+259F) and box drawing (U+2500-U+257F) characters use custom rendering.
     public var customBlockGlyphs: Bool = true {
         didSet {
