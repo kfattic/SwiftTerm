@@ -49,6 +49,33 @@ The array must contain exactly 16 ``Color`` values. SwiftTerm derives entries
 terminalView.installColors(myCustomPalette)
 ```
 
+### Themes
+
+A ``TerminalTheme`` holds a complete look as data: the default colors, the 16
+ANSI colors, the bold, cursor and selection colors, the background opacity, the
+font, the cursor style, and the text options. It is `Codable`, so you can store
+the themes people make. On macOS, apply one to a view in a single call:
+
+```swift
+terminalView.apply(theme: .solarizedDark)
+```
+
+The built-in themes are ``TerminalTheme/homebrew`` (Terminal.app's profile),
+``TerminalTheme/solarizedDark``, ``TerminalTheme/solarizedLight`` and
+``TerminalTheme/dracula``; ``TerminalTheme/presets`` lists them.
+
+Themes can be read from and written to the files other terminals use:
+
+```swift
+// iTerm2 color files (colors only; the rest comes from `base`)
+let theme = try TerminalTheme(itermColors: data, name: "My Colors", base: .dracula)
+let itermData = try theme.itermColorsData()
+
+// Apple Terminal profiles (macOS)
+let profile = try TerminalTheme(terminalProfile: data)
+let terminalData = try profile.terminalProfileData()
+```
+
 ### Selection and Cursor Colors
 
 ```swift
