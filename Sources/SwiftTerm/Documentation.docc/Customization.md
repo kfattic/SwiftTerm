@@ -76,6 +76,22 @@ let profile = try TerminalTheme(terminalProfile: data)
 let terminalData = try profile.terminalProfileData()
 ```
 
+#### A ready-made theme settings screen (macOS 13)
+
+``TerminalThemeSettingsView`` is a SwiftUI settings screen for themes, laid out
+like Terminal.app's Settings → Profiles: theme cards, a live preview, and
+controls for the font, text options, cursor, colors, opacity and ANSI colors.
+It saves with Save (⌘S) and Save As, keeps the person's own themes, and imports
+and exports `.terminal` and `.itermcolors` files. Its state lives in a
+``TerminalThemeLibrary``, which stores themes in `UserDefaults` unless you pass
+your own ``TerminalThemeStorage``.
+
+```swift
+let library = TerminalThemeLibrary()
+window.contentView = NSHostingView(rootView: TerminalThemeSettingsView(library: library))
+let subscription = library.$theme.sink { terminalView.apply(theme: $0) }
+```
+
 ### Selection and Cursor Colors
 
 ```swift

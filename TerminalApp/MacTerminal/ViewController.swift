@@ -144,6 +144,22 @@ class ViewController: NSViewController, @MainActor LocalProcessTerminalViewDeleg
     private var terminalWindowCloseObserver: NSObjectProtocol?
 
     static weak var lastTerminal: LocalProcessTerminalView!
+
+    /// Applies a theme from the Settings window to this terminal. The
+    /// background opacity shows only when the window is not opaque.
+    func applyTheme(_ theme: TerminalTheme) {
+        terminal.apply(theme: theme)
+        if let window = view.window {
+            window.isOpaque = theme.backgroundOpacity >= 1
+            window.backgroundColor = theme.backgroundOpacity >= 1 ? .windowBackgroundColor : .clear
+        }
+    }
+
+    static func applyThemeToAllTerminals(_ theme: TerminalTheme) {
+        for window in NSApp.windows {
+            (window.contentViewController as? ViewController)?.applyTheme(theme)
+        }
+    }
     @MainActor private static var terminalsClosing: Set<ObjectIdentifier> = []
     
     func getBufferAsData () -> Data
@@ -247,6 +263,11 @@ class ViewController: NSViewController, @MainActor LocalProcessTerminalViewDeleg
         terminal.layer?.backgroundColor = defaultBackgroundColor.cgColor
         terminal.caretColor = .systemGreen
         terminal.feed(text: "\u{1b}[2 q")
+        // A theme picked in Settings (see AppDelegate.showThemeSettings).
+        if UserDefaults.standard.bool(forKey: "UsesTerminalTheme"),
+           let appDelegate = NSApp.delegate as? AppDelegate {
+            applyTheme(appDelegate.themeLibrary.theme)
+        }
         zoomGesture = NSMagnificationGestureRecognizer(target: self, action: #selector(zoomGestureHandler))
         terminal.addGestureRecognizer(zoomGesture!)
         ViewController.lastTerminal = terminal
