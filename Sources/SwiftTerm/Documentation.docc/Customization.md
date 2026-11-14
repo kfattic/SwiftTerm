@@ -384,6 +384,32 @@ terminalView.collapseBrightColorsToBase = false
 terminalView.minimumContrastRatio = 4.5
 ```
 
+### Text Like Terminal.app (macOS)
+
+These options make text look the way Terminal.app draws it. They help most on
+non-Retina displays, where antialiased text looks soft. The defaults keep the
+current rendering, so nothing changes until you set them. They work with both
+the Core Graphics and the Metal renderer.
+
+```swift
+// "Antialias text" off: crisp, pixel-sharp glyphs
+terminalView.textAntialiasing = false
+
+// "Use bold fonts" off: bold text uses the regular face
+terminalView.useBoldFonts = false
+
+// Fonts without a bold face (Andale Mono, Monaco): draw bold text twice,
+// one pixel apart, instead of drawing it like regular text
+terminalView.syntheticBold = true
+
+// The "Bold Text" color, for bold text in the default foreground color
+terminalView.boldForegroundColor = NSColor(srgbRed: 0, green: 0.98, blue: 0, alpha: 1)
+
+// Round the font's ascent, descent and leading up one by one, as
+// Terminal.app does (Andale Mono 14 is then 17 points high instead of 16)
+terminalView.terminalAppLineHeight = true
+```
+
 ### GPU-Accelerated Rendering
 
 On macOS, iOS, and visionOS, you can switch to a Metal-based rendering path

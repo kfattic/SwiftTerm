@@ -24,6 +24,9 @@ let SwiftTermExplicitBackgroundKey = NSAttributedString.Key("SwiftTermExplicitBa
 /// Carries a ``TerminalGlyphPlacementPolicy`` on runs whose font is a host
 /// glyph fallback, so both draw paths can apply the placement to each glyph.
 let SwiftTermGlyphPolicyKey = NSAttributedString.Key("SwiftTermGlyphPolicy")
+/// Marks bold text in a font without a bold face, which is drawn twice, one
+/// pixel apart; see `TerminalView.syntheticBold`.
+let SwiftTermSyntheticBoldKey = NSAttributedString.Key("SwiftTermSyntheticBold")
 
 private func cellPixelDimension(_ points: CGFloat, scale: CGFloat) -> Int {
     let value = (points * scale).rounded()
@@ -110,6 +113,9 @@ struct FrameFontSet: Sendable {
     private let boldReference: ImmutableFontReference
     private let italicReference: ImmutableFontReference
     private let boldItalicReference: ImmutableFontReference
+    /// Bold text is drawn twice, one pixel apart; see `TerminalView.syntheticBold`.
+    let syntheticBold: Bool
+    let syntheticBoldItalic: Bool
 
     @MainActor
     init (_ fonts: TerminalView.FontSet) {
@@ -117,6 +123,8 @@ struct FrameFontSet: Sendable {
         boldReference = ImmutableFontReference(fonts.bold)
         italicReference = ImmutableFontReference(fonts.italic)
         boldItalicReference = ImmutableFontReference(fonts.boldItalic)
+        syntheticBold = fonts.syntheticBold
+        syntheticBoldItalic = fonts.syntheticBoldItalic
     }
 
     var normal: TTFont { normalReference.value }
@@ -241,6 +249,9 @@ struct FrameAppearance: Sendable, Equatable {
     let linkColor: FrameColor?
     /// Overrides only the underline of highlighted links.
     let linkUnderlineColor: FrameColor?
+    /// The color of bold text in the default foreground color, or `nil` to
+    /// use the default foreground color.
+    var boldForegroundColor: FrameColor? = nil
 }
 
 /// Caches main-actor font copies and dynamic-color resolution for frame input.
@@ -255,6 +266,7 @@ final class FrameCaptureCache {
     private var sourceColors: [TTColor] = []
     private var sourceLinkColor: TTColor?
     private var sourceLinkUnderlineColor: TTColor?
+    private var sourceBoldForegroundColor: TTColor?
     private var appearanceSignature = 0
     private var cachedAppearance: FrameAppearance?
 
@@ -267,6 +279,8 @@ final class FrameCaptureCache {
         let current = [view.fontSet.normal, view.fontSet.bold,
                        view.fontSet.italic, view.fontSet.boldItalic]
         if let cachedFonts,
+           cachedFonts.syntheticBold == view.fontSet.syntheticBold,
+           cachedFonts.syntheticBoldItalic == view.fontSet.syntheticBoldItalic,
            sourceFonts.count == current.count,
            zip(sourceFonts, current).allSatisfy({ $0.0.isEqual($0.1) }) {
             return cachedFonts
@@ -293,8 +307,12 @@ final class FrameCaptureCache {
         let linkColor = view.linkColor
         let linkUnderlineColor = view.linkUnderlineColor
 #if os(macOS)
+        // Reverse video (DECSCNM) swaps the default colors; the bold color
+        // belongs to the normal pair, so it is not used then.
+        let boldForegroundColor = view.reverseColorsActiveValue() ? nil : view.boldForegroundColor
         let signature = view.effectiveAppearance.name.rawValue.hashValue
 #else
+        let boldForegroundColor: TTColor? = nil
         let signature = view.traitCollection.hash
 #endif
         if let cachedAppearance,
@@ -302,7 +320,8 @@ final class FrameCaptureCache {
            sourceColors.count == current.count,
            zip(sourceColors, current).allSatisfy({ $0.0.isEqual($0.1) }),
            sourceLinkColor?.isEqual(linkColor) ?? (linkColor == nil),
-           sourceLinkUnderlineColor?.isEqual(linkUnderlineColor) ?? (linkUnderlineColor == nil) {
+           sourceLinkUnderlineColor?.isEqual(linkUnderlineColor) ?? (linkUnderlineColor == nil),
+           sourceBoldForegroundColor?.isEqual(boldForegroundColor) ?? (boldForegroundColor == nil) {
             return cachedAppearance
         }
 
@@ -314,10 +333,12 @@ final class FrameCaptureCache {
             caretColor: FrameColor(current[4], view: view),
             caretTextColor: FrameColor(current[5], view: view),
             linkColor: linkColor.map { FrameColor($0, view: view) },
-            linkUnderlineColor: linkUnderlineColor.map { FrameColor($0, view: view) })
+            linkUnderlineColor: linkUnderlineColor.map { FrameColor($0, view: view) },
+            boldForegroundColor: boldForegroundColor.map { FrameColor($0, view: view) })
         sourceColors = current
         sourceLinkColor = linkColor
         sourceLinkUnderlineColor = linkUnderlineColor
+        sourceBoldForegroundColor = boldForegroundColor
         appearanceSignature = signature
         cachedAppearance = result
 #if DEBUG
@@ -387,6 +408,7 @@ fileprivate struct CoreTextRunAttributeNames: Sendable {
     let underlineStyle = NSAttributedString.Key.underlineStyle.rawValue
     let strikethroughStyle = NSAttributedString.Key.strikethroughStyle.rawValue
     let glyphPolicy = SwiftTermGlyphPolicyKey.rawValue
+    let syntheticBold = SwiftTermSyntheticBoldKey.rawValue
 }
 
 fileprivate let coreTextRunAttributeNames = CoreTextRunAttributeNames()
@@ -404,6 +426,7 @@ fileprivate struct CoreTextRunAttributeKeys {
     let underlineStyle: NSString
     let strikethroughStyle: NSString
     let glyphPolicy: NSString
+    let syntheticBold: NSString
 
     init(names: CoreTextRunAttributeNames) {
         font = names.font as NSString
@@ -414,6 +437,7 @@ fileprivate struct CoreTextRunAttributeKeys {
         underlineStyle = names.underlineStyle as NSString
         strikethroughStyle = names.strikethroughStyle as NSString
         glyphPolicy = names.glyphPolicy as NSString
+        syntheticBold = names.syntheticBold as NSString
     }
 }
 
@@ -429,6 +453,9 @@ struct PreparedRun {
     let glyphPolicy: TerminalGlyphPlacementPolicy?
     /// True when the run carries underline or strikethrough attributes.
     let hasDecorations: Bool
+    /// True when the run's glyphs are drawn a second time, one pixel to the
+    /// right; see `TerminalView.syntheticBold`.
+    let syntheticBold: Bool
     /// Terminal cells the run's source text came from; spans its background
     /// and decorations.
     let sourceCells: Range<Int>
@@ -552,6 +579,7 @@ struct FrameViewState: Sendable {
     let imageScale: CGFloat
     let metalBufferingMode: MetalBufferingMode
     let fontSmoothing: Bool
+    let textAntialiasing: Bool
     let antiAliasCustomBlockGlyphs: Bool
     let cursorHasFocus: Bool
     let appearance: FrameAppearance
@@ -587,10 +615,12 @@ struct FrameViewState: Sendable {
 #if os(macOS)
         renderingScale = view.metalRenderingScaleFactor()
         fontSmoothing = view.fontSmoothing
+        textAntialiasing = view.textAntialiasing
         cursorHasFocus = !view.caretViewTracksFocus || view.hasFocus
 #else
         renderingScale = view.backingScaleFactor()
         fontSmoothing = true
+        textAntialiasing = true
         cursorHasFocus = !view.caretViewTracksFocus || view.isFirstResponder
 #endif
         let backingScale = view.backingScaleFactor()
@@ -663,9 +693,13 @@ struct SnapshotRenderContext {
     let imageScale: CGFloat
     let metalBufferingMode: MetalBufferingMode
     let fontSmoothing: Bool
+    /// False draws text glyphs without antialiasing; see `TerminalView.textAntialiasing`.
+    let textAntialiasing: Bool
     let antiAliasCustomBlockGlyphs: Bool
     let cursorHasFocus: Bool
     let effectiveForegroundColor: TTColor
+    /// The color of bold text in the default foreground color, or `nil`.
+    let boldForegroundColor: TTColor?
     let effectiveBackgroundColor: TTColor
     let selectedTextBackgroundColor: TTColor
     let selectedTextForegroundColor: TTColor
@@ -743,11 +777,13 @@ struct SnapshotRenderContext {
         viewBounds = viewState.viewBounds
         renderingScale = viewState.renderingScale
         fontSmoothing = viewState.fontSmoothing
+        textAntialiasing = viewState.textAntialiasing
         cursorHasFocus = viewState.cursorHasFocus
         imageScale = viewState.imageScale
         metalBufferingMode = viewState.metalBufferingMode
         antiAliasCustomBlockGlyphs = viewState.antiAliasCustomBlockGlyphs
         effectiveForegroundColor = nativeColors.effectiveForegroundColor
+        boldForegroundColor = viewState.appearance.boldForegroundColor?.nativeColor
         effectiveBackgroundColor = nativeColors.effectiveBackgroundColor
         selectedTextBackgroundColor = nativeColors.selectedTextBackgroundColor
         selectedTextForegroundColor = nativeColors.selectedTextForegroundColor
@@ -793,6 +829,9 @@ struct SnapshotRenderContext {
         identityHasher.combine(caretTextColor.hash)
         identityHasher.combine(linkColor?.hash)
         identityHasher.combine(linkUnderlineColor?.hash)
+        identityHasher.combine(boldForegroundColor?.hash)
+        identityHasher.combine(fonts.syntheticBold)
+        identityHasher.combine(fonts.syntheticBoldItalic)
         for color in self.ansiColors {
             identityHasher.combine(color.hash)
         }
@@ -821,6 +860,17 @@ struct SnapshotRenderContext {
 /// the snapshot renderers do this arithmetic on their own threads, from the
 /// fonts and cell dimensions captured for the frame.
 enum CellGeometry {
+    /// The unsnapped height of a cell. `terminalAppLineHeight` rounds each
+    /// metric up before adding them, as Terminal.app does, instead of
+    /// rounding up only their sum.
+    static func cellHeight (ascent: CGFloat, descent: CGFloat, leading: CGFloat,
+                            lineSpacing: CGFloat, terminalAppLineHeight: Bool) -> CGFloat {
+        let natural = terminalAppLineHeight
+            ? ceil(ascent) + ceil(descent) + ceil(leading)
+            : ascent + descent + leading
+        return ceil(natural * lineSpacing)
+    }
+
     /// Snap after the full drawing transform: a caret's local origin and a
     /// double-height row can both carry a fractional device-pixel translation.
     static func pixelAlignedGlyphOrigin(_ point: CGPoint, in context: CGContext) -> CGPoint {
@@ -1618,6 +1668,35 @@ extension TerminalView {
         get { _fontSmoothing }
         set { _fontSmoothing = newValue }
     }
+
+    /// Controls whether text glyphs are drawn with antialiasing. Set to `false` for
+    /// crisp, pixel-sharp text, the way Terminal.app draws it with "Antialias text"
+    /// turned off; this is most visible on non-Retina displays. Font smoothing needs
+    /// antialiasing, so it is off too while this is `false`. Custom block and box
+    /// glyphs keep following ``antiAliasCustomBlockGlyphs``.
+    /// Defaults to `true`.
+    @objc open var textAntialiasing: Bool {
+        get { _textAntialiasing }
+        set {
+            guard _textAntialiasing != newValue else { return }
+            _textAntialiasing = newValue
+            colorsChanged()
+        }
+    }
+
+    /// Measures the line height the way Terminal.app does: the font's ascent,
+    /// descent and leading are each rounded up before they are added, instead of
+    /// rounding up their sum. Most fonts get the same height either way; some
+    /// get one more point (Andale Mono 14 is 17 points high in Terminal.app and 16
+    /// otherwise). ``lineSpacing`` still applies on top. Defaults to `false`.
+    @objc open var terminalAppLineHeight: Bool {
+        get { _terminalAppLineHeight }
+        set {
+            guard _terminalAppLineHeight != newValue else { return }
+            _terminalAppLineHeight = newValue
+            resetFont()
+        }
+    }
 #endif
 
     /// Multiplier for vertical line spacing. 1.0 = default (ascent + descent + leading).
@@ -2150,7 +2229,14 @@ extension TerminalView {
         let lineAscent = CTFontGetAscent (fontSet.normal)
         let lineDescent = CTFontGetDescent (fontSet.normal)
         let lineLeading = CTFontGetLeading (fontSet.normal)
-        let cellHeight = ceil((lineAscent + lineDescent + lineLeading) * _lineSpacing)
+        #if os(macOS)
+        let terminalAppLineHeight = _terminalAppLineHeight
+        #else
+        let terminalAppLineHeight = false
+        #endif
+        let cellHeight = CellGeometry.cellHeight(ascent: lineAscent, descent: lineDescent, leading: lineLeading,
+                                                 lineSpacing: _lineSpacing,
+                                                 terminalAppLineHeight: terminalAppLineHeight)
         #if os(macOS)
         // The following is a more robust way of getting the largest ascii character width, but comes with a performance hit.
         // See: https://github.com/migueldeicaza/SwiftTerm/issues/286
@@ -2240,6 +2326,11 @@ extension TerminalView {
         switch color {
         case .defaultColor:
             if isFg {
+                #if os(macOS)
+                if isBold, let boldForegroundColor, !reverseColorsActiveValue() {
+                    return boldForegroundColor
+                }
+                #endif
                 return effectiveNativeForegroundColor
             } else {
                 return effectiveNativeBackgroundColor
@@ -3647,6 +3738,8 @@ extension CoreGraphicsPaintHost {
                                 forKey: runAttributeKeys.underlineStyle) != nil
                                 || attrs.object(
                                     forKey: runAttributeKeys.strikethroughStyle) != nil,
+                            syntheticBold: attrs.object(
+                                forKey: runAttributeKeys.syntheticBold) != nil,
                             sourceCells: segment.cellOrdinals(in: CTRunGetStringRange(run)),
                             attributes: attrs)
                     }
@@ -3735,11 +3828,11 @@ extension CoreGraphicsPaintHost {
                                     in: context)
             }
 
-            context.setShouldAntialias(true)
-            context.setAllowsAntialiasing(true)
+            context.setShouldAntialias(renderContext.textAntialiasing)
+            context.setAllowsAntialiasing(renderContext.textAntialiasing)
             #if os(macOS)
-            context.setShouldSmoothFonts(fontSmoothing)
-            context.setAllowsFontSmoothing(fontSmoothing)
+            context.setShouldSmoothFonts(fontSmoothing && renderContext.textAntialiasing)
+            context.setAllowsFontSmoothing(fontSmoothing && renderContext.textAntialiasing)
             #endif
 
             // Glyph drawing loop — reuses cached CTLines
@@ -3879,6 +3972,14 @@ extension CoreGraphicsPaintHost {
                         }
                     } else {
                         CTFontDrawGlyphs(runFont, runGlyphs, &glyphPositions, glyphPositions.count, context)
+                        if preparedRun.syntheticBold {
+                            // Bold text in a font without a bold face: draw it
+                            // again one device pixel to the right, as
+                            // Terminal.app does; see `TerminalView.syntheticBold`.
+                            let dx = 1 / max(1, context.userSpaceToDeviceSpaceTransform.a)
+                            var shifted = glyphPositions.map { CGPoint(x: $0.x + dx, y: $0.y) }
+                            CTFontDrawGlyphs(runFont, runGlyphs, &shifted, shifted.count, context)
+                        }
                     }
 
                     // Draw other attributes, once per source cell (a ligature

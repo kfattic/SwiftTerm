@@ -217,6 +217,11 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         let bold: NSFont
         let italic: NSFont
         let boldItalic: NSFont
+        /// True when bold text is drawn twice, one pixel apart, because the
+        /// font has no bold face; see ``TerminalView/syntheticBold``.
+        let syntheticBold: Bool
+        /// As `syntheticBold`, for bold italic text.
+        let syntheticBoldItalic: Bool
         
         static var defaultFont: NSFont {
             if #available(macOS 10.15, *)  {
@@ -226,11 +231,27 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
             }
         }
         
-        public init(font baseFont: NSFont, fontSize: CGFloat? = nil) {
+        /// - Parameters:
+        ///   - useBoldFonts: false draws bold text with the regular (or italic) face.
+        ///   - syntheticBold: true draws bold text twice, one pixel apart, when the
+        ///     font has no bold face. Has no effect when `useBoldFonts` is false.
+        public init(font baseFont: NSFont, fontSize: CGFloat? = nil,
+                    useBoldFonts: Bool = true, syntheticBold: Bool = false) {
             self.normal = baseFont
-            self.bold = NSFontManager.shared.convert(baseFont, toHaveTrait: [.boldFontMask])
             self.italic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask])
-            self.boldItalic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask, .boldFontMask])
+            if useBoldFonts {
+                self.bold = NSFontManager.shared.convert(baseFont, toHaveTrait: [.boldFontMask])
+                self.boldItalic = NSFontManager.shared.convert(baseFont, toHaveTrait: [.italicFontMask, .boldFontMask])
+            } else {
+                self.bold = baseFont
+                self.boldItalic = self.italic
+            }
+            // NSFontManager returns the font it was given when the family has
+            // no bold member, so an unchanged name means there is no bold face.
+            self.syntheticBold = useBoldFonts && syntheticBold
+                && bold.fontName == normal.fontName
+            self.syntheticBoldItalic = useBoldFonts && syntheticBold
+                && boldItalic.fontName == italic.fontName
         }
 
         // Expected by the shared rendering code
@@ -480,7 +501,9 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     var cellDimensionBackingScale: CGFloat = 1
     var caretView: CaretView!
     var _fontSmoothing: Bool = true
+    var _textAntialiasing: Bool = true
     var _lineSpacing: CGFloat = 1.0
+    var _terminalAppLineHeight: Bool = false
     var terminal: Terminal!
 
     /// Marked (uncommitted) text from an input source (IME, dictation, etc.).
@@ -539,10 +562,22 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
             return fontSet.normal
         }
         set {
-            fontSet = FontSet (font: newValue)
+            fontSet = makeFontSet (newValue)
             resetFont()
             selectNone()
         }
+    }
+
+    func makeFontSet (_ font: NSFont) -> FontSet {
+        FontSet (font: font, useBoldFonts: useBoldFonts, syntheticBold: syntheticBold)
+    }
+
+    /// Rebuilds the bold faces. The cell size comes from the regular face
+    /// alone, so unlike a font change this neither measures nor resizes.
+    func boldFacesChanged () {
+        fontSet = makeFontSet (fontSet.normal)
+        colorsChanged ()
+        updateCaretView ()
     }
     
     public init(frame: CGRect, font: NSFont?) {
@@ -1440,6 +1475,38 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     public var useBrightColors: Bool = true {
         didSet {
             guard useBrightColors != oldValue else { return }
+            colorsChanged ()
+        }
+    }
+
+    /// Draws bold text with the font's bold face. Set it to false to draw bold
+    /// text with the regular face, as Terminal.app does with "Use bold fonts"
+    /// turned off; bold text still gets its bold color. The default is true.
+    public var useBoldFonts: Bool = true {
+        didSet {
+            guard useBoldFonts != oldValue else { return }
+            boldFacesChanged ()
+        }
+    }
+
+    /// When the font has no bold face (for example Andale Mono or Monaco), draws
+    /// bold text twice, one pixel apart, the way Terminal.app does, instead of
+    /// drawing it exactly like regular text. Fonts with a bold face are not
+    /// affected, and neither is anything while `useBoldFonts` is false.
+    /// The default is false.
+    public var syntheticBold: Bool = false {
+        didSet {
+            guard syntheticBold != oldValue else { return }
+            boldFacesChanged ()
+        }
+    }
+
+    /// The color of bold text that uses the default foreground color, like
+    /// Terminal.app's "Bold Text" color. Bold text with an explicit color keeps
+    /// it. `nil`, the default, draws it with `nativeForegroundColor`.
+    public var boldForegroundColor: NSColor? = nil {
+        didSet {
+            guard boldForegroundColor != oldValue else { return }
             colorsChanged ()
         }
     }
@@ -3747,7 +3814,7 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     {
         // Recompute metrics and redraw, but unlike the font setter do not
         // clear the active selection
-        fontSet = FontSet (font: FontSet.defaultFont)
+        fontSet = makeFontSet (FontSet.defaultFont)
         resetFont ()
     }
     

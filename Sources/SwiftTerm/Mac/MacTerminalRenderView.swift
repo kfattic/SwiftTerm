@@ -47,9 +47,33 @@ open class TerminalRenderView: NSView, CaretHost {
     public var font: NSFont {
         get { fontSet.normal }
         set {
-            fontSet = TerminalView.FontSet(font: newValue)
+            fontSet = TerminalView.FontSet(font: newValue, useBoldFonts: useBoldFonts,
+                                           syntheticBold: syntheticBold)
             updateMetrics()
         }
+    }
+
+    /// Draws bold text with the font's bold face; see ``TerminalView/useBoldFonts``.
+    public var useBoldFonts: Bool = true {
+        didSet {
+            guard useBoldFonts != oldValue else { return }
+            font = fontSet.normal
+        }
+    }
+
+    /// Draws bold text twice, one pixel apart, when the font has no bold face;
+    /// see ``TerminalView/syntheticBold``.
+    public var syntheticBold: Bool = false {
+        didSet {
+            guard syntheticBold != oldValue else { return }
+            font = fontSet.normal
+        }
+    }
+
+    /// Measures the line height as Terminal.app does; see
+    /// ``TerminalView/terminalAppLineHeight``.
+    public var terminalAppLineHeight: Bool = false {
+        didSet { updateMetrics() }
     }
 
     /// The factor applied to the font's natural line height.
@@ -60,6 +84,9 @@ open class TerminalRenderView: NSView, CaretHost {
     /// Draws glyphs with font smoothing. Set it to false for thinner strokes;
     /// see ``TerminalView/fontSmoothing``.
     public var fontSmoothing: Bool = true { didSet { invalidateAll() } }
+    /// Draws text glyphs with antialiasing. Set it to false for crisp,
+    /// pixel-sharp text; see ``TerminalView/textAntialiasing``.
+    public var textAntialiasing: Bool = true { didSet { invalidateAll() } }
     /// Draws the custom block and box glyphs with anti-aliasing instead of
     /// pixel-aligned edges; see ``TerminalView/antiAliasCustomBlockGlyphs``.
     public var antiAliasCustomBlockGlyphs: Bool = false { didSet { invalidateAll() } }
@@ -107,6 +134,9 @@ open class TerminalRenderView: NSView, CaretHost {
 
     /// The default foreground color: the color of text with no explicit color.
     public var nativeForegroundColor: NSColor = .textColor { didSet { colorsChanged() } }
+    /// The color of bold text in the default foreground color; see
+    /// ``TerminalView/boldForegroundColor``.
+    public var boldForegroundColor: NSColor? = nil { didSet { colorsChanged() } }
     /// The default background color. The view fills its background with it.
     public var nativeBackgroundColor: NSColor = .textBackgroundColor { didSet { colorsChanged() } }
     /// The background color of selected text.
@@ -337,7 +367,9 @@ open class TerminalRenderView: NSView, CaretHost {
 
     private func computeCellDimension () -> TerminalView.CellDimension {
         let normal = fontSet.normal
-        let height = ceil((CTFontGetAscent(normal) + CTFontGetDescent(normal) + CTFontGetLeading(normal)) * lineSpacing)
+        let height = CellGeometry.cellHeight(ascent: CTFontGetAscent(normal), descent: CTFontGetDescent(normal),
+                                             leading: CTFontGetLeading(normal), lineSpacing: lineSpacing,
+                                             terminalAppLineHeight: terminalAppLineHeight)
         // As in TerminalView.computeFontDimensions.
         let width = TerminalView.cellAdvance(of: normal)
         let scale = backingScaleFactor()
@@ -363,7 +395,10 @@ open class TerminalRenderView: NSView, CaretHost {
     }
 
     func frameFonts () -> FrameFontSet {
-        if let cachedFonts, cachedFonts.source.isEqual(fontSet.normal) {
+        if let cachedFonts, cachedFonts.source.isEqual(fontSet.normal),
+           cachedFonts.fonts.bold.isEqual(fontSet.bold),
+           cachedFonts.fonts.syntheticBold == fontSet.syntheticBold,
+           cachedFonts.fonts.syntheticBoldItalic == fontSet.syntheticBoldItalic {
             return cachedFonts.fonts
         }
         let fonts = FrameFontSet(fontSet)
@@ -390,7 +425,8 @@ open class TerminalRenderView: NSView, CaretHost {
             caretColor: FrameColor(key[4], appearance: appearance),
             caretTextColor: FrameColor(key[5], appearance: appearance),
             linkColor: linkColor.map { FrameColor($0, appearance: appearance) },
-            linkUnderlineColor: linkUnderlineColor.map { FrameColor($0, appearance: appearance) })
+            linkUnderlineColor: linkUnderlineColor.map { FrameColor($0, appearance: appearance) },
+            boldForegroundColor: boldForegroundColor.map { FrameColor($0, appearance: appearance) })
         cachedAppearance = (key, name, value)
         return value
     }

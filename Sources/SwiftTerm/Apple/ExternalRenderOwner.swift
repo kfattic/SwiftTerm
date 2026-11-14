@@ -154,10 +154,12 @@ extension FrameViewState {
         renderingScale = scale
 #if os(macOS)
         fontSmoothing = view.fontSmoothing
+        textAntialiasing = view.textAntialiasing
         translucentCellBackgrounds = view.translucentCellBackgrounds
 #else
         // As in the iOS TerminalView.
         fontSmoothing = true
+        textAntialiasing = true
         translucentCellBackgrounds = false
 #endif
         cursorHasFocus = view.hasFocus

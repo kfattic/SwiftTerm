@@ -146,7 +146,9 @@ the user types, so that the caret stays visible.
 
 The view has the appearance properties of `TerminalView`, for example `font`,
 `lineSpacing`, `nativeForegroundColor`, `nativeBackgroundColor`, `caretColor`,
-`minimumContrastRatio` and `bidiHostPolicy`. Call `setUseMetal(_:)` to draw
+`minimumContrastRatio`, `bidiHostPolicy` and the Terminal.app text options
+(`textAntialiasing`, `useBoldFonts`, `syntheticBold`, `boldForegroundColor`,
+`terminalAppLineHeight`). Call `setUseMetal(_:)` to draw
 with the Metal renderer. If the device has no Metal support, the method
 throws ``MetalError`` and the view continues with Core Graphics.
 

@@ -163,6 +163,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             self.boldItalic = boldItalic
         }
         
+        // Expected by the shared rendering code; synthetic bold is macOS only.
+        var syntheticBold: Bool { false }
+        var syntheticBoldItalic: Bool { false }
+
         // Expected by the shared rendering code
         func underlinePosition () -> CGFloat
         {

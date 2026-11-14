@@ -16,6 +16,8 @@ import UIKit
 struct GlyphKey: Hashable {
     let rasterFontToken: UInt32
     let glyph: CGGlyph
+    /// Rasterized twice, one pixel apart; see `TerminalView.syntheticBold`.
+    var syntheticBold: Bool = false
 }
 
 private struct CoreTextFontIdentity: Hashable {
@@ -657,6 +659,7 @@ struct CacheSignature: Hashable {
     let linkModifierActive: Bool
     let customBlockGlyphs: Bool
     let antiAliasCustomBlockGlyphs: Bool
+    let textAntialiasing: Bool
     let imageScale: Double
 }
 
@@ -1367,6 +1370,7 @@ final class MetalTerminalRenderer {
         let renderContext = refreshed.context
 #if os(macOS)
         rasterizer.fontSmoothing = renderContext.fontSmoothing
+        rasterizer.textAntialiasing = renderContext.textAntialiasing
         let scale = renderContext.renderingScale
 #else
         let scale = renderContext.renderingScale
@@ -1738,8 +1742,13 @@ final class MetalTerminalRenderer {
                                        linkModifierActive: linkModifierActive,
                                        customBlockGlyphs: context.customBlockGlyphs,
                                        antiAliasCustomBlockGlyphs: context.antiAliasCustomBlockGlyphs,
+                                       textAntialiasing: context.textAntialiasing,
                                        imageScale: Double(context.imageScale))
         if signature != cacheSignature {
+            if signature.textAntialiasing != cacheSignature?.textAntialiasing {
+                // Cached bitmaps were rasterized with the other setting.
+                glyphBitmapResultCache.removeAll()
+            }
             if signature.glyphFallbackIdentity != cacheSignature?.glyphFallbackIdentity {
                 // A replaced host fallback font can be CFEqual to its
                 // predecessor (same PostScript name and size), which would
@@ -2110,6 +2119,7 @@ final class MetalTerminalRenderer {
 
                 let textColor = runAttributes[.foregroundColor] as? TTColor ?? context.effectiveForegroundColor
                 let textColorSIMD = colorToSIMD(textColor)
+                let syntheticBold = runAttributes[SwiftTermSyntheticBoldKey] != nil
 
                 let glyphPolicy = runAttributes[SwiftTermGlyphPolicyKey] as? TerminalGlyphPlacementPolicy
                 let policyIconHeight = glyphPolicy != nil
@@ -2150,7 +2160,8 @@ final class MetalTerminalRenderer {
                             fittingFont: glyphRun.font,
                             renderingScale: scale,
                             metricsFont: &metricsFont,
-                            glyph: glyph) else {
+                            glyph: glyph,
+                            syntheticBold: syntheticBold) else {
                             continue
                         }
                         let entry = resolvedGlyph.entry
@@ -2401,7 +2412,8 @@ final class MetalTerminalRenderer {
                                                      fittingFont: font.shapedFont,
                                                      renderingScale: scale,
                                                      metricsFont: &metricsFonts[face],
-                                                     glyph: glyph) else {
+                                                     glyph: glyph,
+                                                     syntheticBold: style.syntheticBold) else {
                     continue
                 }
                 let entry = resolvedGlyph.entry
@@ -3085,8 +3097,10 @@ final class MetalTerminalRenderer {
                             fittingFont: CTFont,
                             renderingScale: CGFloat,
                             metricsFont: inout GlyphMetricsFont?,
-                            glyph: CGGlyph) -> ResolvedGlyph? {
-        let key = GlyphKey(rasterFontToken: rasterFontToken, glyph: glyph)
+                            glyph: CGGlyph,
+                            syntheticBold: Bool = false) -> ResolvedGlyph? {
+        let key = GlyphKey(rasterFontToken: rasterFontToken, glyph: glyph,
+                           syntheticBold: syntheticBold)
         if ProfilingStats.enabled {
             activeProfileCounters.glyphAtlasLookups += 1
         }
@@ -3126,7 +3140,8 @@ final class MetalTerminalRenderer {
             activeProfileCounters.rasterizations += 1
         }
         let bitmap: GlyphBitmap
-        switch rasterizer.rasterize(font: font, glyph: glyph, metrics: metrics) {
+        switch rasterizer.rasterize(font: font, glyph: glyph, metrics: metrics,
+                                    syntheticBold: syntheticBold) {
         case .bitmap(let result):
             bitmap = result
             if ProfilingStats.enabled {
@@ -4140,7 +4155,8 @@ final class MetalTerminalRenderer {
                     fittingFont: ctFont,
                     renderingScale: scale,
                     metricsFont: &metricsFont,
-                    glyph: glyph) else {
+                    glyph: glyph,
+                    syntheticBold: runAttributes[SwiftTermSyntheticBoldKey] != nil) else {
                     continue
                 }
                 let entry = resolvedGlyph.entry

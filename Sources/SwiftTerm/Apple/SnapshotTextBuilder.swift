@@ -83,6 +83,8 @@ struct PlainRunStyle {
     var shapeColor: PlainColor
     var background: PlainColor
     var explicitBackground: Bool
+    /// Drawn twice, one pixel apart; see `TerminalView.syntheticBold`.
+    var syntheticBold: Bool = false
     var selectionBackground: TTColor? = nil
     var underline: PlainUnderline? = nil
     /// The strikethrough color; the style is always single.
@@ -324,10 +326,13 @@ final class SnapshotTextBuilder {
         }
         let isBold = flags.contains(.bold)
         let font: TTFont
+        let syntheticBold: Bool
         if isBold || brightNeedsBold {
             font = flags.contains(.italic) ? context.fonts.boldItalic : context.fonts.bold
+            syntheticBold = flags.contains(.italic) ? context.fonts.syntheticBoldItalic : context.fonts.syntheticBold
         } else {
             font = flags.contains(.italic) ? context.fonts.italic : context.fonts.normal
+            syntheticBold = false
         }
 
         var foregroundColor = mapColor(color: foreground, isFg: true,
@@ -366,6 +371,9 @@ final class SnapshotTextBuilder {
         ]
         if background != .defaultColor {
             result[SwiftTermExplicitBackgroundKey] = true
+        }
+        if syntheticBold {
+            result[SwiftTermSyntheticBoldKey] = true
         }
         if flags.contains(.underline) {
             let color = attribute.underlineColor.map {
@@ -883,6 +891,11 @@ final class SnapshotTextBuilder {
                                   shapeColor: shapeColor,
                                   background: backgroundColor,
                                   explicitBackground: background != .defaultColor)
+        switch fontIndex {
+        case 1: style.syntheticBold = context.fonts.syntheticBold
+        case 3: style.syntheticBold = context.fonts.syntheticBoldItalic
+        default: break
+        }
         if context.translucentCellBackgroundAlpha != nil {
             style.background = .color(cellBackgroundFill(platformColor(backgroundColor, context: context),
                                                         for: background, context: context))
@@ -998,6 +1011,7 @@ final class SnapshotTextBuilder {
                                  context: SnapshotRenderContext) -> Bool
     {
         guard a.explicitBackground == b.explicitBackground,
+              a.syntheticBold == b.syntheticBold,
               (a.selectionBackground == nil) == (b.selectionBackground == nil),
               (a.underline == nil) == (b.underline == nil),
               (a.strikethrough == nil) == (b.strikethrough == nil) else {
@@ -1134,6 +1148,9 @@ func mapColor (color: Attribute.Color, isFg: Bool, isBold: Bool,
 {
     switch color {
     case .defaultColor:
+        if isFg && isBold, let boldForegroundColor = context.boldForegroundColor {
+            return boldForegroundColor
+        }
         return isFg ? context.effectiveForegroundColor : context.effectiveBackgroundColor
     case .defaultInvertedColor:
         return (isFg ? context.effectiveBackgroundColor : context.effectiveForegroundColor)
@@ -1174,8 +1191,10 @@ func attributedValue (for attribute: Attribute, usingFg: TTColor, andBg: TTColor
     }
 
     let font: TTFont
+    var syntheticBold = false
     if flags.contains(.bold) {
         font = flags.contains(.italic) ? context.fonts.boldItalic : context.fonts.bold
+        syntheticBold = flags.contains(.italic) ? context.fonts.syntheticBoldItalic : context.fonts.syntheticBold
     } else {
         font = flags.contains(.italic) ? context.fonts.italic : context.fonts.normal
     }
@@ -1184,6 +1203,9 @@ func attributedValue (for attribute: Attribute, usingFg: TTColor, andBg: TTColor
         .foregroundColor: foreground,
         .backgroundColor: background,
     ]
+    if syntheticBold {
+        result[SwiftTermSyntheticBoldKey] = true
+    }
     if flags.contains(.underline) {
         let color = attribute.underlineColor.map {
             mapColor(color: $0, isFg: true, isBold: false, context: context)

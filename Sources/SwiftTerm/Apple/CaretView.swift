@@ -133,6 +133,12 @@ extension CaretView {
                 }
             } else {
                 CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                if runAttributes[SwiftTermSyntheticBoldKey] != nil {
+                    // See `TerminalView.syntheticBold`.
+                    let dx = 1 / max(1, context.userSpaceToDeviceSpaceTransform.a)
+                    var shifted = positions.map { CGPoint(x: $0.x + dx, y: $0.y) }
+                    CTFontDrawGlyphs(runFont, runGlyphs, &shifted, shifted.count, context)
+                }
             }
         }
     }

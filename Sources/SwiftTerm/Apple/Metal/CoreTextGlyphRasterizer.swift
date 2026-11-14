@@ -11,6 +11,8 @@ enum GlyphRasterizationResult {
 
 final class CoreTextGlyphRasterizer {
     var fontSmoothing: Bool = true
+    /// False rasterizes glyphs without antialiasing; see `TerminalView.textAntialiasing`.
+    var textAntialiasing: Bool = true
 #if DEBUG
     var forceContextCreationFailureForTesting = false
 #endif
@@ -22,9 +24,15 @@ final class CoreTextGlyphRasterizer {
 
     /// Rasterizes with the same unrounded bounds used by slot fitting.
     /// This path performs no Core Text bounds or advance query.
-    func rasterize(font: CTFont, glyph: CGGlyph, metrics: GlyphMetrics) -> GlyphRasterizationResult {
+    func rasterize(font: CTFont, glyph: CGGlyph, metrics: GlyphMetrics,
+                   syntheticBold: Bool = false) -> GlyphRasterizationResult {
         var glyphVar = glyph
-        let rect = metrics.inkBounds
+        var rect = metrics.inkBounds
+        if syntheticBold {
+            // The second strike lands one pixel to the right; see
+            // `TerminalView.syntheticBold`.
+            rect.size.width += 1
+        }
         if rect.width <= 0 || rect.height <= 0 {
             return .empty
         }
@@ -64,15 +72,15 @@ final class CoreTextGlyphRasterizer {
                 return false
             }
 
-            context.setAllowsAntialiasing(true)
-            context.setShouldAntialias(true)
+            context.setAllowsAntialiasing(textAntialiasing)
+            context.setShouldAntialias(textAntialiasing)
             context.setAllowsFontSubpixelPositioning(true)
             context.setShouldSubpixelPositionFonts(true)
             context.setAllowsFontSubpixelQuantization(false)
             context.setShouldSubpixelQuantizeFonts(false)
 #if os(macOS)
-            context.setAllowsFontSmoothing(fontSmoothing)
-            context.setShouldSmoothFonts(fontSmoothing)
+            context.setAllowsFontSmoothing(fontSmoothing && textAntialiasing)
+            context.setShouldSmoothFonts(fontSmoothing && textAntialiasing)
 #else
             context.setAllowsFontSmoothing(false)
             context.setShouldSmoothFonts(false)
@@ -83,6 +91,10 @@ final class CoreTextGlyphRasterizer {
 
             var positions = [CGPoint(x: -minX, y: -minY)]
             CTFontDrawGlyphs(font, &glyphVar, &positions, 1, context)
+            if syntheticBold {
+                positions[0].x += 1
+                CTFontDrawGlyphs(font, &glyphVar, &positions, 1, context)
+            }
             return true
         }
         if !drew {
